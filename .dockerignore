@@ -1,0 +1,7 @@
+.git
+.private
+*.log
+*.db
+*.db-wal
+*.db-shm
+vendor

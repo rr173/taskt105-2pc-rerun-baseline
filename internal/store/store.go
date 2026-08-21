@@ -80,6 +80,11 @@ var (
 	// ErrInvalidState means the transaction is not in a state required for
 	// the requested operation.
 	ErrInvalidState = errors.New("invalid state for operation")
+	// ErrInvalidFinal means the participant final value passed to
+	// FinalizeParticipant is neither FinalCommitted nor FinalAborted. Such a
+	// value is rejected before any row is touched, so the participant record,
+	// the transaction state and the resource counters are all left unchanged.
+	ErrInvalidFinal = errors.New("invalid participant final state")
 	// ErrNoDecision means the transaction has no recorded decision (still
 	// PREPARING), so the second phase cannot be driven.
 	ErrNoDecision = errors.New("no decision recorded")
@@ -588,7 +593,15 @@ func (s *Store) listNonFinalTxnsDirect(ctx context.Context) ([]TxnRow, error) {
 // committed_count (both idempotent via the ledger PK); for abort it
 // increments aborted_count (idempotent via the participant final column).
 // Re-running on an already-final participant is a no-op.
+//
+// A participant's terminal state must be exactly FinalCommitted or
+// FinalAborted; any other value is rejected with ErrInvalidFinal before any
+// row is read or written, so an invalid final leaves the participant record,
+// the transaction state and the resource counters untouched.
 func (s *Store) FinalizeParticipant(ctx context.Context, txnID, resource, final string, now int64) error {
+	if final != FinalCommitted && final != FinalAborted {
+		return ErrInvalidFinal
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

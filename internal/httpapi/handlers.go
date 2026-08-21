@@ -11,6 +11,7 @@
 //   - store.ErrResourceMissing        -> 400 (referenced resource not registered)
 //   - store.ErrResourceInUse         -> 409 (resource in use, with active txns)
 //   - store.ErrInvalidState          -> 409 (with current state in the body)
+//   - store.ErrInvalidFinal          -> 400 (unknown participant final value)
 //   - store.ErrNoDecision            -> 409 PREPARING
 //   - store.ErrNotTerminal           -> 409 (txn not terminal)
 //   - input validation errors        -> 400
@@ -186,6 +187,8 @@ func mapError(err error) (int, string) {
 		return http.StatusBadRequest, "resource not registered"
 	case errors.Is(err, store.ErrInvalidState):
 		return http.StatusConflict, err.Error()
+	case errors.Is(err, store.ErrInvalidFinal):
+		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, store.ErrNoDecision):
 		return http.StatusConflict, "PREPARING"
 	case errors.Is(err, store.ErrNotTerminal):

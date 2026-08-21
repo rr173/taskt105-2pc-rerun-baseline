@@ -735,7 +735,8 @@ func (s *Store) ListLedger(ctx context.Context) ([]LedgerRow, error) {
 }
 
 // ListLedgerForResource returns the committed-effect rows for one resource,
-// ordered by applied_at.
+// ordered by the actual effect time (applied_at), with txn_id as a stable
+// tiebreaker when two effects share the same applied_at.
 func (s *Store) ListLedgerForResource(ctx context.Context, resource string) ([]LedgerRow, bool, error) {
 	ok, err := s.resourceExists(ctx, resource)
 	if err != nil {
@@ -745,7 +746,7 @@ func (s *Store) ListLedgerForResource(ctx context.Context, resource string) ([]L
 		return nil, false, nil
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT resource, txn_id, applied_at FROM commit_ledger WHERE resource = ? ORDER BY txn_id ASC, applied_at ASC`,
+		`SELECT resource, txn_id, applied_at FROM commit_ledger WHERE resource = ? ORDER BY applied_at ASC, txn_id ASC`,
 		resource)
 	if err != nil {
 		return nil, false, err

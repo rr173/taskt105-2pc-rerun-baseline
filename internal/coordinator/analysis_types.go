@@ -24,6 +24,7 @@ type CoordinatorAnalysis struct {
 	Resources       []ResourceDiagnostic `json:"resources"`
 	Votes           VoteSummary          `json:"votes"`
 	Decisions       int                  `json:"decisions"`
+	CommitDecisions int                  `json:"commit_decisions"`
 	LedgerRows      int                  `json:"ledger_rows"`
 	RecoveryPending int                  `json:"recovery_pending"`
 	Healthy         bool                 `json:"healthy"`

@@ -20,6 +20,10 @@ func (c *Coordinator) Analyze(ctx context.Context) (CoordinatorAnalysis, error) 
 	if err != nil {
 		return CoordinatorAnalysis{}, err
 	}
+	commitDecisions, err := c.commitDecisionCount(ctx)
+	if err != nil {
+		return CoordinatorAnalysis{}, err
+	}
 	ledger, err := c.ledgerCount(ctx)
 	if err != nil {
 		return CoordinatorAnalysis{}, err
@@ -41,5 +45,5 @@ func (c *Coordinator) Analyze(ctx context.Context) (CoordinatorAnalysis, error) 
 	}
 	sort.Slice(txns, func(i, j int) bool { return txns[i].TxnID < txns[j].TxnID })
 	sort.Slice(resources, func(i, j int) bool { return resources[i].Name < resources[j].Name })
-	return CoordinatorAnalysis{Transactions: txns, Resources: resources, Votes: allParts, Decisions: decisions, LedgerRows: ledger, RecoveryPending: pending, Healthy: analysisHealthy(txns, resources, pending)}, nil
+	return CoordinatorAnalysis{Transactions: txns, Resources: resources, Votes: allParts, Decisions: decisions, CommitDecisions: commitDecisions, LedgerRows: ledger, RecoveryPending: pending, Healthy: analysisHealthy(txns, resources, pending)}, nil
 }

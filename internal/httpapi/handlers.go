@@ -20,6 +20,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -213,11 +214,26 @@ func isValidationError(err error) bool {
 
 // decodeJSON decodes r.Body into v. On failure it writes a 400 and returns
 // false; the caller must return early.
+//
+// A request body must contain exactly one complete JSON value. The first
+// successful decode only consumes that value, so a second decode is used to
+// detect any trailing content — be it a second JSON document or any other
+// non-whitespace garbage. Such a body is rejected with 400 before the handler
+// performs any write, so a trailing document can never trigger the first
+// object's side effect.
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "json: " + err.Error()})
+		return false
+	}
+	// Detect a second JSON value (or any trailing non-whitespace bytes) after
+	// the first. io.EOF means the first value was the whole body — the only
+	// accepted case; everything else is a malformed (multi-document) body.
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "json: request body must contain a single JSON value"})
 		return false
 	}
 	return true

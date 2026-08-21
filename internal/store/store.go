@@ -587,7 +587,12 @@ func (s *Store) listNonFinalTxnsDirect(ctx context.Context) ([]TxnRow, error) {
 // observable effect: for commit it appends a ledger row and increments
 // committed_count (both idempotent via the ledger PK); for abort it
 // increments aborted_count (idempotent via the participant final column).
-// Re-running on an already-final participant is a no-op.
+// Re-running on an already-final participant is a no-op: once a
+// participant's final column is set, neither the ledger row nor the
+// resource counter is touched again — so a retry that arrives after the
+// transaction is already terminal keeps both ledger and resource counts
+// unchanged (the ledger insert would be ignored by the PK, but the
+// counter increment has no such guard and must not re-run).
 func (s *Store) FinalizeParticipant(ctx context.Context, txnID, resource, final string, now int64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -603,11 +608,14 @@ func (s *Store) FinalizeParticipant(ctx context.Context, txnID, resource, final 
 		}
 		return fmt.Errorf("read final: %w", err)
 	}
-	var txnState string
-	if err := tx.QueryRowContext(ctx, `SELECT state FROM transactions WHERE txn_id = ?`, txnID).Scan(&txnState); err != nil {
-		return fmt.Errorf("read txn state: %w", err)
-	}
-	if curFinal.String != "" && txnState != StateCommitted && txnState != StateAborted {
+	// Idempotency: once this participant's final state is set, the effect
+	// (ledger row + counter increment) has already been applied. A retry —
+	// whether the transaction is still COMMITTING/ABORTING or already
+	// terminal (COMMITTED/ABORTED) — must be a no-op. In particular, the
+	// resource counter has no primary-key guard like the ledger does, so
+	// falling through here would double-count while the ledger insert is
+	// silently ignored by its PK.
+	if curFinal.String != "" {
 		return tx.Commit()
 	}
 	if _, err := tx.ExecContext(ctx,

@@ -29,6 +29,14 @@ import (
 	"task105-2pc/internal/store"
 )
 
+// ErrParticipantHandleMissing is returned by the completion phase when a
+// participant that still needs to be driven (its final state is not yet
+// recorded) has no callable resource handle in the coordinator. Finishing
+// such a transaction would mark it committed/aborted without ever notifying
+// that participant, so the operation must fail and leave the transaction in
+// its non-terminal (COMMITTING/ABORTING) state instead.
+var ErrParticipantHandleMissing = errors.New("participant handle missing")
+
 // Clock abstracts time so tests can drive deterministic recovery scenarios
 // without sleeping. Production uses RealClock.
 type Clock interface {
@@ -399,6 +407,12 @@ type RecoveryRecord struct {
 // the transaction already has a recorded decision (state COMMITTING or
 // ABORTING). For each participant, if its final field is non-empty it is
 // skipped — this is the idempotency that makes repeated recovery safe.
+//
+// If a not-yet-final participant has no callable resource handle the whole
+// operation fails with ErrParticipantHandleMissing and the transaction is
+// left in its non-terminal (COMMITTING/ABORTING) state. Marking such a
+// transaction committed or aborted would claim a participant was notified
+// when it never was; failing keeps it recoverable once the handle returns.
 func (c *Coordinator) driveSecondPhase(ctx context.Context, t store.TxnRow, parts []store.ParticipantRow) (string, []store.ParticipantRow, error) {
 	wantCommit := t.State == store.StateCommitting
 	now := c.clock.Now()
@@ -407,20 +421,24 @@ func (c *Coordinator) driveSecondPhase(ctx context.Context, t store.TxnRow, part
 			continue
 		}
 		res, ok := c.resources[parts[i].Resource]
+		if !ok {
+			// This participant still needs to be driven to the recorded
+			// decision, but no handle exists to call Commit/Abort on.
+			// Refuse rather than silently recording a final state for a
+			// participant that was never notified. The transaction stays
+			// COMMITTING/ABORTING — SetTxnFinalState below is never reached.
+			return "", nil, fmt.Errorf("participant %s: %w", parts[i].Resource, ErrParticipantHandleMissing)
+		}
 		var final string
 		if wantCommit {
 			final = store.FinalCommitted
-			if ok {
-				if err := res.Commit(ctx); err != nil {
-					return "", nil, fmt.Errorf("commit %s: %w", parts[i].Resource, err)
-				}
+			if err := res.Commit(ctx); err != nil {
+				return "", nil, fmt.Errorf("commit %s: %w", parts[i].Resource, err)
 			}
 		} else {
 			final = store.FinalAborted
-			if ok {
-				if err := res.Abort(ctx); err != nil {
-					return "", nil, fmt.Errorf("abort %s: %w", parts[i].Resource, err)
-				}
+			if err := res.Abort(ctx); err != nil {
+				return "", nil, fmt.Errorf("abort %s: %w", parts[i].Resource, err)
 			}
 		}
 		if err := c.store.FinalizeParticipant(ctx, t.TxnID, parts[i].Resource, final, now); err != nil {

@@ -9,6 +9,7 @@
 //   - store.ErrResourceExists        -> 409 (resource exists)
 //   - store.ErrTxnExists             -> 409 (txn exists)
 //   - store.ErrResourceMissing        -> 400 (referenced resource not registered)
+//   - store.ErrDuplicateParticipant   -> 400 (same resource listed twice in a txn)
 //   - store.ErrResourceInUse         -> 409 (resource in use, with active txns)
 //   - store.ErrInvalidState          -> 409 (with current state in the body)
 //   - store.ErrNoDecision            -> 409 PREPARING
@@ -184,6 +185,8 @@ func mapError(err error) (int, string) {
 		return http.StatusConflict, "txn exists"
 	case errors.Is(err, store.ErrResourceMissing):
 		return http.StatusBadRequest, "resource not registered"
+	case errors.Is(err, store.ErrDuplicateParticipant):
+		return http.StatusBadRequest, "duplicate participant resource"
 	case errors.Is(err, store.ErrInvalidState):
 		return http.StatusConflict, err.Error()
 	case errors.Is(err, store.ErrNoDecision):

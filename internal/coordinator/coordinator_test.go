@@ -60,6 +60,22 @@ func TestBeginUnknownResource(t *testing.T) {
 	}
 }
 
+func TestBeginDuplicateParticipant(t *testing.T) {
+	c, _, _ := newTestCoordinator(t)
+	ctx := context.Background()
+	mustRegister(t, c, "R1", "yes")
+	// The same resource twice in one request is a client input error, not a
+	// server error: it must be rejected before the store is touched.
+	err := c.Begin(ctx, "T1", []string{"R1", "R1"})
+	if !errors.Is(err, store.ErrDuplicateParticipant) {
+		t.Fatalf("expected ErrDuplicateParticipant, got %v", err)
+	}
+	// No half-created transaction survives the rejection.
+	if _, _, err := c.GetTxn(ctx, "T1"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for rejected txn, got %v", err)
+	}
+}
+
 func TestPrepareCommitDecision(t *testing.T) {
 	c, st, _ := newTestCoordinator(t)
 	ctx := context.Background()

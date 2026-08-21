@@ -78,6 +78,23 @@ func TestBeginTxnDuplicate(t *testing.T) {
 	}
 }
 
+func TestBeginTxnDuplicateParticipant(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	s.RegisterResource(ctx, "R1", VoteYes, 1)
+	err := s.BeginTxn(ctx, "T1", []string{"R1", "R1"}, 2)
+	if !errors.Is(err, ErrDuplicateParticipant) {
+		t.Fatalf("expected ErrDuplicateParticipant, got %v", err)
+	}
+	// A duplicate must not leave a half-created transaction behind.
+	if _, _, err := s.GetTxn(ctx, "T1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for rejected txn, got %v", err)
+	}
+	if n := countRows(t, s, "participants"); n != 0 {
+		t.Fatalf("participants rows=%d want 0", n)
+	}
+}
+
 func TestRecordPrepareStateGuard(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

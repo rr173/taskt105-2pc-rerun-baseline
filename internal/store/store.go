@@ -74,6 +74,12 @@ var (
 	ErrTxnExists = errors.New("txn exists")
 	// ErrResourceMissing means a referenced resource has not been registered.
 	ErrResourceMissing = errors.New("resource not registered")
+	// ErrDuplicateParticipant means the same resource appears more than once
+	// in a single begin-transaction request. It is a client input error, not
+	// a storage-layer integrity failure: the (txn_id, resource) participant
+	// primary key would otherwise reject the second insert as a generic
+	// UNIQUE-constraint error that surfaces as a 500.
+	ErrDuplicateParticipant = errors.New("duplicate participant resource")
 	// ErrResourceInUse means a resource is referenced by a non-terminal txn
 	// and so cannot be deleted.
 	ErrResourceInUse = errors.New("resource in use")
@@ -363,7 +369,9 @@ func (s *Store) DeleteResource(ctx context.Context, name string) ([]string, erro
 
 // BeginTxn creates a transaction in PREPARING state with one participant row
 // per resource. Returns ErrResourceMissing for unknown names, ErrTxnExists for
-// a duplicate txn_id.
+// a duplicate txn_id, and ErrDuplicateParticipant when the same resource
+// appears more than once in the request — a client input error that must not
+// surface as a generic UNIQUE-constraint 500.
 func (s *Store) BeginTxn(ctx context.Context, txnID string, resources []string, now int64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -371,7 +379,16 @@ func (s *Store) BeginTxn(ctx context.Context, txnID string, resources []string, 
 	}
 	defer tx.Rollback()
 
+	seen := make(map[string]struct{}, len(resources))
 	for _, r := range resources {
+		// Reject a duplicate participant up front: the participants table's
+		// (txn_id, resource) primary key would otherwise reject the second
+		// insert as a bare UNIQUE-constraint error. Catching it here keeps the
+		// failure a 400 client error and leaves no half-created transaction.
+		if _, dup := seen[r]; dup {
+			return ErrDuplicateParticipant
+		}
+		seen[r] = struct{}{}
 		var tmp string
 		err := tx.QueryRowContext(ctx, `SELECT name FROM resources WHERE name = ?`, r).Scan(&tmp)
 		if err != nil {

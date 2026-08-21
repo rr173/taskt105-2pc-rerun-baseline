@@ -168,10 +168,20 @@ func (c *Coordinator) Begin(ctx context.Context, txnID string, resources []strin
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	seen := make(map[string]struct{}, len(resources))
 	for _, r := range resources {
 		if r == "" {
 			return errors.New("resource name is empty")
 		}
+		// The same resource may not appear twice in one transaction: each
+		// participant is a distinct (txn, resource) pair, so a duplicate is a
+		// client input error, not a storage integrity error. Rejecting it
+		// here keeps the failure a 400 and never lets a half-created txn
+		// reach the store.
+		if _, dup := seen[r]; dup {
+			return store.ErrDuplicateParticipant
+		}
+		seen[r] = struct{}{}
 		if _, ok := c.resources[r]; !ok {
 			return store.ErrResourceMissing
 		}

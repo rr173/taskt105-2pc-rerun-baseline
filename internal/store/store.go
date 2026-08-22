@@ -634,13 +634,56 @@ func (s *Store) FinalizeParticipant(ctx context.Context, txnID, resource, final 
 	return tx.Commit()
 }
 
-// SetTxnFinalState sets the transaction's terminal state. Idempotent.
+// SetTxnFinalState transitions a transaction into a terminal state
+// (COMMITTED or ABORTED). It enforces the terminal-state boundary:
+//
+//   - the target must be a terminal state (COMMITTED or ABORTED); writing the
+//     txn back to a non-terminal state (PREPARING/COMMITTING/ABORTING) is
+//     rejected with ErrInvalidState;
+//   - the only legal live transition is the matching decision state:
+//     COMMITTING -> COMMITTED and ABORTING -> ABORTED. Any other source state
+//     (e.g. PREPARING, or a terminal state being flipped to the other
+//     terminal) is rejected with ErrInvalidState;
+//   - re-applying the txn's current terminal state is an idempotent no-op.
+//
+// On rejection the transaction's existing state is left untouched. Returns
+// ErrNotFound when the txn does not exist.
 func (s *Store) SetTxnFinalState(ctx context.Context, txnID, state string, now int64) error {
-	if _, err := s.db.ExecContext(ctx,
+	if state != StateCommitted && state != StateAborted {
+		return ErrInvalidState
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var cur string
+	err = tx.QueryRowContext(ctx, `SELECT state FROM transactions WHERE txn_id = ?`, txnID).Scan(&cur)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("read state: %w", err)
+	}
+	// Idempotent: already in the requested terminal state.
+	if cur == state {
+		return tx.Commit()
+	}
+	// The only legal live transition is the matching decision state into its
+	// terminal state.
+	legal := (state == StateCommitted && cur == StateCommitting) ||
+		(state == StateAborted && cur == StateAborting)
+	if !legal {
+		// Illegal transition: leave the existing state untouched. The deferred
+		// rollback discards the read-only transaction; no UPDATE was issued.
+		return ErrInvalidState
+	}
+	if _, err := tx.ExecContext(ctx,
 		`UPDATE transactions SET state = ? WHERE txn_id = ?`, state, txnID); err != nil {
 		return fmt.Errorf("set final state: %w", err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // DeleteTxn removes a transaction and all its rows (participants, decision,

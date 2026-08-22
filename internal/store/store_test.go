@@ -216,3 +216,92 @@ func countRows(t *testing.T, s *Store, table string) int {
 	}
 	return n
 }
+
+func TestSetTxnFinalStateRejectsNonTerminal(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	s.RegisterResource(ctx, "R1", VoteYes, 1)
+	s.BeginTxn(ctx, "T1", []string{"R1"}, 2)
+	s.RecordPrepare(ctx, "T1", map[string]string{"R1": VoteYes}, DecisionCommit, 3) // COMMITTING
+
+	// Writing a non-terminal state back onto a live txn must fail.
+	err := s.SetTxnFinalState(ctx, "T1", StatePreparing, 4)
+	if !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("non-terminal target: expected ErrInvalidState, got %v", err)
+	}
+	for _, bad := range []string{StateCommitting, StateAborting, ""} {
+		if err := s.SetTxnFinalState(ctx, "T1", bad, 5); !errors.Is(err, ErrInvalidState) {
+			t.Fatalf("SetTxnFinalState(%q): expected ErrInvalidState, got %v", bad, err)
+		}
+	}
+	// Original state preserved: still COMMITTING, not rewritten.
+	txn, _, _ := s.GetTxn(ctx, "T1")
+	if txn.State != StateCommitting {
+		t.Fatalf("state clobbered to %s, want %s", txn.State, StateCommitting)
+	}
+}
+
+func TestSetTxnFinalStateRejectsIllegalTransition(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	s.RegisterResource(ctx, "R1", VoteYes, 1)
+	// COMMITTING -> COMMITTED is legal.
+	s.BeginTxn(ctx, "T1", []string{"R1"}, 2)
+	s.RecordPrepare(ctx, "T1", map[string]string{"R1": VoteYes}, DecisionCommit, 3)
+	if err := s.SetTxnFinalState(ctx, "T1", StateCommitted, 4); err != nil {
+		t.Fatalf("COMMITTING->COMMITTED: %v", err)
+	}
+	// Flipping COMMITTED -> ABORTED (or back to COMMITTING) must fail.
+	if err := s.SetTxnFinalState(ctx, "T1", StateAborted, 5); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("flip COMMITTED->ABORTED: expected ErrInvalidState, got %v", err)
+	}
+	if err := s.SetTxnFinalState(ctx, "T1", StateCommitting, 6); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("rewrite COMMITTED->COMMITTING: expected ErrInvalidState, got %v", err)
+	}
+	txn, _, _ := s.GetTxn(ctx, "T1")
+	if txn.State != StateCommitted {
+		t.Fatalf("terminal state clobbered to %s, want %s", txn.State, StateCommitted)
+	}
+}
+
+func TestSetTxnFinalStateRejectsPreparingSource(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	s.RegisterResource(ctx, "R1", VoteYes, 1)
+	s.BeginTxn(ctx, "T1", []string{"R1"}, 2) // PREPARING, no decision
+	// PREPARING has no recorded decision, so it must not be driven to a
+	// terminal state directly.
+	if err := s.SetTxnFinalState(ctx, "T1", StateCommitted, 3); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("PREPARING->COMMITTED: expected ErrInvalidState, got %v", err)
+	}
+	if err := s.SetTxnFinalState(ctx, "T1", StateAborted, 4); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("PREPARING->ABORTED: expected ErrInvalidState, got %v", err)
+	}
+	txn, _, _ := s.GetTxn(ctx, "T1")
+	if txn.State != StatePreparing {
+		t.Fatalf("PREPARING clobbered to %s", txn.State)
+	}
+}
+
+func TestSetTxnFinalStateIdempotent(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	s.RegisterResource(ctx, "R1", VoteYes, 1)
+	s.BeginTxn(ctx, "T1", []string{"R1"}, 2)
+	s.RecordPrepare(ctx, "T1", map[string]string{"R1": VoteYes}, DecisionCommit, 3)
+	if err := s.SetTxnFinalState(ctx, "T1", StateCommitted, 4); err != nil {
+		t.Fatalf("first set: %v", err)
+	}
+	// Re-applying the same terminal state is a no-op success.
+	if err := s.SetTxnFinalState(ctx, "T1", StateCommitted, 5); err != nil {
+		t.Fatalf("idempotent re-set: %v", err)
+	}
+}
+
+func TestSetTxnFinalStateNotFound(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	if err := s.SetTxnFinalState(ctx, "NOPE", StateCommitted, 1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing txn: expected ErrNotFound, got %v", err)
+	}
+}

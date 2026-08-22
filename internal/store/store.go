@@ -867,8 +867,9 @@ type RecoverPreviewRow struct {
 }
 
 // ListRecoverPreview returns the non-final txns and the terminal state each
-// would reach if recovered. PREPARING -> ABORTED, COMMITTING -> COMMITTED,
-// ABORTING -> ABORTED. It does not mutate state.
+// would reach if Recover ran now — mirroring Recover's recovery strategy
+// without touching state. PREPARING (no decision recorded) -> ABORTED,
+// COMMITTING -> COMMITTED, ABORTING -> ABORTED. It does not mutate state.
 func (s *Store) ListRecoverPreview(ctx context.Context) ([]RecoverPreviewRow, error) {
 	txns, err := s.listNonFinalTxnsDirect(ctx)
 	if err != nil {
@@ -876,8 +877,11 @@ func (s *Store) ListRecoverPreview(ctx context.Context) ([]RecoverPreviewRow, er
 	}
 	out := make([]RecoverPreviewRow, 0, len(txns))
 	for _, t := range txns {
+		// Mirror Recover's strategy exactly: a PREPARING txn has no
+		// recorded decision yet, so recovery treats it as unsafe to
+		// commit and aborts it. Only COMMITTING proceeds to commit.
 		target := StateAborted
-		if t.State == StateCommitting || t.State == StatePreparing {
+		if t.State == StateCommitting {
 			target = StateCommitted
 		}
 		out = append(out, RecoverPreviewRow{TxnID: t.TxnID, CurrentState: t.State, TargetState: target})

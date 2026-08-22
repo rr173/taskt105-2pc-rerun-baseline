@@ -129,10 +129,13 @@ func (c *Coordinator) UpdateResourceVote(ctx context.Context, name, vote string)
 	}
 	c.mu.Lock()
 	if ir, ok := c.resources[name].(*InMemoryResource); ok {
-		// Keep the old live vote when a resource is changed from no to yes.
-		if ir.vote == store.VoteYes && vote == store.VoteNo {
-			ir.SetVote(vote)
-		}
+		// Always keep the in-memory vote in sync with the latest configured
+		// vote. A resource initially voting "no" that is reconfigured to
+		// "yes" must have Prepare return "yes" for newly created txns, so they
+		// reach the commit phase instead of being rolled back on the stale
+		// "no" vote. Syncing both directions is what makes the runtime
+		// observe the latest configuration.
+		ir.SetVote(vote)
 	} else {
 		c.resources[name] = NewInMemoryResource(name, vote)
 	}

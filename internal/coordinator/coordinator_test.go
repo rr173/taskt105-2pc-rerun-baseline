@@ -320,6 +320,42 @@ func TestUpdateResourceVote(t *testing.T) {
 	}
 }
 
+// TestUpdateResourceVoteNoToYes covers the regression where a resource is
+// initially configured to vote "no" and is later reconfigured to "yes": newly
+// created transactions must observe the latest "yes" vote and reach the commit
+// phase, not the stale "no" vote that would spuriously abort them.
+func TestUpdateResourceVoteNoToYes(t *testing.T) {
+	c, _, _ := newTestCoordinator(t)
+	ctx := context.Background()
+	mustRegister(t, c, "R1", "no")
+	// Reconfigure from "no" to "yes".
+	if err := c.UpdateResourceVote(ctx, "R1", "yes"); err != nil {
+		t.Fatal(err)
+	}
+	// A newly created and prepared transaction must reach the commit phase.
+	if err := c.Begin(ctx, "T1", []string{"R1"}); err != nil {
+		t.Fatal(err)
+	}
+	pr, err := c.Prepare(ctx, "T1")
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if pr.Decision != store.DecisionCommit {
+		t.Fatalf("after no->yes update decision=%s want commit", pr.Decision)
+	}
+	if pr.State != store.StateCommitting {
+		t.Fatalf("after no->yes update state=%s want COMMITTING", pr.State)
+	}
+	if pr.Votes["R1"] != store.VoteYes {
+		t.Fatalf("after no->yes update vote=%s want yes", pr.Votes["R1"])
+	}
+	// Finish must drive it all the way to COMMITTED, not roll it back.
+	state, _, err := c.Finish(ctx, "T1")
+	if err != nil || state != store.StateCommitted {
+		t.Fatalf("finish: state=%s err=%v (want COMMITTED)", state, err)
+	}
+}
+
 func TestDeleteTerminalTxn(t *testing.T) {
 	c, _, _ := newTestCoordinator(t)
 	ctx := context.Background()
